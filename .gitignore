@@ -1,0 +1,47 @@
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]serSettings/
+[Mm]emoryCaptures/
+
+# Unity auto-generated
+/*.csproj
+/*.sln
+/*.unityproj
+
+# NuGet for Unity (restored via NuGet Restore)
+Assets/Packages/
+Assets/Packages.meta
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vs/
+.vscode/
+*.swp
+*.swo
+
+# .NET build artifacts
+ProtoHandlerGenerator/bin/
+ProtoHandlerGenerator/obj/
+ProtoHandlerGenerator.Tests/bin/
+ProtoHandlerGenerator.Tests/obj/
+
+# Test results
+TestResults*.xml
+
+# URP auto-generated
+Assets/DefaultVolumeProfile.asset
+Assets/DefaultVolumeProfile.asset.meta
+Assets/UniversalRenderPipelineGlobalSettings.asset
+Assets/UniversalRenderPipelineGlobalSettings.asset.meta
+
+# Crashlytics
+crashlytics-build.properties

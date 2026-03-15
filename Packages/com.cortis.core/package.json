@@ -1,0 +1,19 @@
+{
+    "name": "com.cortis.core",
+    "version": "0.1.0",
+    "displayName": "Cortis",
+    "description": "Type-safe protobuf communication framework for Unity. Provides Binder pattern for command/event handling over MessageGateway.",
+    "unity": "6000.0",
+    "dependencies": {},
+    "keywords": [
+        "unity",
+        "protobuf",
+        "communication",
+        "source-generator",
+        "vcontainer"
+    ],
+    "author": {
+        "name": "sencha"
+    },
+    "license": "MIT"
+}
