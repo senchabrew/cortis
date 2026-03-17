@@ -25,6 +25,9 @@ namespace Example
 
             // Event-only Presenter の登録
             EventOnlyPresenter.Register(builder, Lifetime.Singleton);
+
+            // Routed Presenter の登録（inner 型で登録するが、Gateway は root 型で通信する）
+            RoutedPresenter.Register(builder, Lifetime.Singleton);
         }
     }
 }

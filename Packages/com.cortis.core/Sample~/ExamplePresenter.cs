@@ -1,25 +1,29 @@
 // =============================================================================
 // ExamplePresenter.cs
-// [ProtoHandler] を使ったPresenterの実装例
+// [ProtoHandler] を使ったPresenterの実装例（Command+Event / ルーティングなし）
 // =============================================================================
 //
 // 前提: protobuf で以下のようなメッセージを定義済み
 //
-//   message ExampleCommand {
-//     oneof command {
-//       SetScale set_scale = 1;
-//       Reset reset = 2;
+//   message Cube {
+//     message Command {
+//       message SetScale { float x = 1; float y = 2; float z = 3; }
+//       message Reset {}
+//       oneof command {
+//         SetScale set_scale = 1;
+//         Reset reset = 2;
+//       }
 //     }
-//     message SetScale { float x = 1; float y = 2; float z = 3; }
-//     message Reset {}
+//     message Event {
+//       message ScaleChanged { float x = 1; float y = 2; float z = 3; }
+//       oneof event {
+//         ScaleChanged scale_changed = 1;
+//       }
+//     }
 //   }
 //
-//   message ExampleEvent {
-//     oneof event {
-//       ScaleChanged scale_changed = 1;
-//     }
-//     message ScaleChanged { float x = 1; float y = 2; float z = 3; }
-//   }
+// ルーティングなしの場合: Gateway が Cube.Command / Cube.Event を直接やり取りする。
+// root 型 (App.Command) に包まれている場合は RoutedPresenter.cs を参照。
 // =============================================================================
 
 using Cortis;
@@ -28,12 +32,12 @@ using UnityEngine;
 namespace Example
 {
     // [ProtoHandler] を付けると Source Generator が以下を自動生成する:
-    //   - ICommandHandler<ExampleCommand>.Handle() の switch ディスパッチ
-    //   - IEventSource<ExampleEvent>.Events プロパティ
-    //   - DispatchEvent() ヘルパーメソッド（各 Event case ごと）
+    //   - ICommandHandler<Cube.Types.Command>.Handle() の switch ディスパッチ
+    //   - IEventSource<Cube.Types.Event>.Events プロパティ
+    //   - DispatchEvent() ヘルパーメソッド（各 event case ごと）
     //   - IInitializable.Initialize() / IDisposable.Dispose()
     //   - Register() 静的メソッド（VContainer 登録用）
-    [ProtoHandler(typeof(ExampleCommand), typeof(ExampleEvent))]
+    [ProtoHandler(typeof(Cube.Types.Command), typeof(Cube.Types.Event))]
     public sealed partial class ExamplePresenter
     {
         readonly Transform _target;
@@ -43,14 +47,14 @@ namespace Example
             _target = target;
         }
 
-        // コマンドハンドラ: メソッド引数の型で自動マッチされる
-        void HandleSetScale(ExampleCommand.Types.SetScale cmd)
+        // ハンドラ: メソッド引数の型で自動マッチされる
+        void HandleSetScale(Cube.Types.Command.Types.SetScale cmd)
         {
             var scale = new Vector3(cmd.X, cmd.Y, cmd.Z);
             _target.localScale = scale;
 
-            // イベントを Flutter 側に通知
-            DispatchEvent(new ExampleEvent.Types.ScaleChanged
+            // 状態変更を Flutter 側に通知
+            DispatchEvent(new Cube.Types.Event.Types.ScaleChanged
             {
                 X = scale.x,
                 Y = scale.y,
@@ -58,11 +62,11 @@ namespace Example
             });
         }
 
-        void HandleReset(ExampleCommand.Types.Reset cmd)
+        void HandleReset(Cube.Types.Command.Types.Reset cmd)
         {
             _target.localScale = Vector3.one;
 
-            DispatchEvent(new ExampleEvent.Types.ScaleChanged
+            DispatchEvent(new Cube.Types.Event.Types.ScaleChanged
             {
                 X = 1f,
                 Y = 1f,
@@ -73,7 +77,6 @@ namespace Example
         // Source Generator が呼び出す partial メソッド
         private partial void OnInitialize()
         {
-            // Binder 接続後の初期化処理
             Debug.Log("ExamplePresenter initialized");
         }
 

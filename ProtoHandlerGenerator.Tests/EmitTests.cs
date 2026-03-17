@@ -379,6 +379,7 @@ namespace Test
         var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO001");
         Assert.Single(diagnostics);
         Assert.Contains("PlayerAction", diagnostics[0].GetMessage());
+        Assert.Contains("void HandlePlayerAction(ExternalProto.PlayerAction command) { }", diagnostics[0].GetMessage());
     }
 }
 
@@ -593,6 +594,617 @@ namespace Test
         Assert.NotNull(generated);
         Assert.Contains("DispatchEvent(TestProto.SimpleEvent value)", generated);
         Assert.Contains("_events.OnNext(value);", generated);
+    }
+}
+
+public class RoutedBindingTests
+{
+    [Fact]
+    public void inner型を指定するとroot型が自動発見されBindRoutedが生成される()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(PlayerAction), typeof(PlayerState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleAttack(PlayerAction.Types.Attack cmd) { }
+        void HandleDefend(PlayerAction.Types.Defend cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("MessageBinding.BindRouted<RoutedProto.AppAction, RoutedProto.PlayerAction, RoutedProto.AppState, RoutedProto.PlayerState>", generated);
+    }
+
+    [Fact]
+    public void unwrapラムダがoneofCaseチェック付きで生成される()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(PlayerAction), typeof(PlayerState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleAttack(PlayerAction.Types.Attack cmd) { }
+        void HandleDefend(PlayerAction.Types.Defend cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("root => root.ActionCase == RoutedProto.AppAction.ActionOneofCase.PlayerAction ? root.PlayerAction : null", generated);
+    }
+
+    [Fact]
+    public void wrapラムダがroot型のオブジェクト初期化子で生成される()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(PlayerAction), typeof(PlayerState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleAttack(PlayerAction.Types.Attack cmd) { }
+        void HandleDefend(PlayerAction.Types.Defend cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("inner => new RoutedProto.AppState { PlayerState = inner }", generated);
+    }
+
+    [Fact]
+    public void ルーティングがあってもinterfaceはinner型のまま()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(PlayerAction), typeof(PlayerState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleAttack(PlayerAction.Types.Attack cmd) { }
+        void HandleDefend(PlayerAction.Types.Defend cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("ICommandHandler<RoutedProto.PlayerAction>", generated);
+        Assert.Contains("IEventSource<RoutedProto.PlayerState>", generated);
+        Assert.Contains("Handle(RoutedProto.PlayerAction command)", generated);
+    }
+
+    [Fact]
+    public void root型を直接指定した場合はルーティングなし()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(AppAction), typeof(AppState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleLoadScene(AppAction.Types.LoadScene cmd) { }
+        void HandlePlayerAction(PlayerAction cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("MessageBinding.Bind<RoutedProto.AppAction, RoutedProto.AppState>", generated);
+        Assert.DoesNotContain("BindRouted", generated);
+    }
+
+    [Fact]
+    public void CommandOnlyでルーティングがある場合_2型パラムのBindRoutedが生成される()
+    {
+        var source = @"
+using Cortis;
+using RoutedCmdOnly;
+
+namespace Test
+{
+    [ProtoHandler(typeof(InnerCommand))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoFoo(InnerCommand.Types.DoFoo cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedCommandOnlyMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("MessageBinding.BindRouted<RoutedCmdOnly.RootCommand, RoutedCmdOnly.InnerCommand>", generated);
+        Assert.Contains("root => root.CommandCase == RoutedCmdOnly.RootCommand.CommandOneofCase.InnerCommand ? root.InnerCommand : null", generated);
+    }
+
+    [Fact]
+    public void protoc実出力のネスト構造でもルーティングが検出される()
+    {
+        var source = @"
+using Cortis;
+using NestedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(Cube.Types.FCommand), typeof(Cube.Types.UEvent))]
+    public sealed partial class TestPresenter
+    {
+        void HandleSetScale(Cube.Types.FCommand.Types.SetScale cmd) { }
+        void HandleReset(Cube.Types.FCommand.Types.Reset cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedNestedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("BindRouted", generated);
+        Assert.Contains("NestedProto.App.Types.FCommand", generated);
+        Assert.Contains("NestedProto.App.Types.UEvent", generated);
+    }
+
+    [Fact]
+    public void 三段ネストでもルーティングが検出されBindRoutedが生成される()
+    {
+        var source = @"
+using Cortis;
+using TripleProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(SubFeature.Types.FCommand), typeof(SubFeature.Types.UEvent))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoAction(SubFeature.Types.FCommand.Types.DoAction cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedTripleNestedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        // Root型がApp.Types.FCommand/UEventであること
+        Assert.Contains("BindRouted", generated);
+        Assert.Contains("TripleProto.App.Types.FCommand", generated);
+        Assert.Contains("TripleProto.App.Types.UEvent", generated);
+    }
+
+    [Fact]
+    public void 三段ネストのunwrapが2ホップのチェーンで生成される()
+    {
+        var source = @"
+using Cortis;
+using TripleProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(SubFeature.Types.FCommand), typeof(SubFeature.Types.UEvent))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoAction(SubFeature.Types.FCommand.Types.DoAction cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedTripleNestedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        // App → Feature → SubFeature の2ホップ unwrap
+        Assert.Contains("TripleProto.App.Types.FCommand.CommandOneofCase.Feature", generated);
+        Assert.Contains("TripleProto.Feature.Types.FCommand.CommandOneofCase.SubFeature", generated);
+    }
+
+    [Fact]
+    public void 三段ネストのwrapが2ホップのチェーンで生成される()
+    {
+        var source = @"
+using Cortis;
+using TripleProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(SubFeature.Types.FCommand), typeof(SubFeature.Types.UEvent))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoAction(SubFeature.Types.FCommand.Types.DoAction cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedTripleNestedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        // SubFeature.UEvent → Feature.UEvent → App.UEvent の2ホップ wrap
+        Assert.Contains("new TripleProto.Feature.Types.UEvent { SubFeature = inner }", generated);
+        Assert.Contains("new TripleProto.App.Types.UEvent { Feature =", generated);
+    }
+
+    [Fact]
+    public void 複数の親がある場合_PROTO005が報告される()
+    {
+        var source = @"
+using Cortis;
+using AmbiguousProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(InnerAction))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoStuff(InnerAction.Types.DoStuff cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.AmbiguousRoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO005");
+        Assert.Single(diagnostics);
+        var msg = diagnostics[0].GetMessage();
+        Assert.Contains("InnerAction", msg);
+        Assert.Contains("[ProtoRoute(typeof(ParentA))]", msg);
+        Assert.Contains("[ProtoRoute(typeof(ParentB))]", msg);
+    }
+
+    [Fact]
+    public void ProtoRouteで曖昧性が解消される()
+    {
+        var source = @"
+using Cortis;
+using AmbiguousProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(InnerAction))]
+    [ProtoRoute(typeof(ParentA))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoStuff(InnerAction.Types.DoStuff cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.AmbiguousRoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO005");
+        Assert.Empty(diagnostics);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("BindRouted", generated);
+        Assert.Contains("ParentA", generated);
+    }
+
+    [Fact]
+    public void ProtoRouteで不正な型を指定するとPROTO006が報告される()
+    {
+        var source = @"
+using Cortis;
+using AmbiguousProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(InnerAction))]
+    [ProtoRoute(typeof(InnerAction))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoStuff(InnerAction.Types.DoStuff cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.AmbiguousRoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO006");
+        Assert.Single(diagnostics);
+        Assert.Contains("InnerAction", diagnostics[0].GetMessage());
+    }
+
+    [Fact]
+    public void EventOnlyでルーティングがある場合_BindRoutedとwrapラムダが生成される()
+    {
+        var source = @"
+using Cortis;
+using RoutedEvtOnly;
+
+namespace Test
+{
+    [ProtoHandler(null, typeof(InnerState))]
+    public sealed partial class TestPresenter
+    {
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedEventOnlyMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("MessageBinding.BindRouted<RoutedEvtOnly.RootState, RoutedEvtOnly.InnerState>(this, gateway,", generated);
+        Assert.Contains("inner => new RoutedEvtOnly.RootState { InnerState = inner }", generated);
+    }
+
+    [Fact]
+    public void Command側のみルーティングありの場合_unwrapが生成されwrapはidentity()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(PlayerAction), typeof(AppState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleAttack(PlayerAction.Types.Attack cmd) { }
+        void HandleDefend(PlayerAction.Types.Defend cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("BindRouted<RoutedProto.AppAction, RoutedProto.PlayerAction, RoutedProto.AppState, RoutedProto.AppState>", generated);
+        Assert.Contains("root => root.ActionCase == RoutedProto.AppAction.ActionOneofCase.PlayerAction ? root.PlayerAction : null", generated);
+        Assert.Contains("inner => inner", generated);
+    }
+
+    [Fact]
+    public void Event側のみルーティングありの場合_wrapが生成されunwrapはidentity()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(AppAction), typeof(PlayerState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleLoadScene(AppAction.Types.LoadScene cmd) { }
+        void HandlePlayerAction(PlayerAction cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("BindRouted<RoutedProto.AppAction, RoutedProto.AppAction, RoutedProto.AppState, RoutedProto.PlayerState>", generated);
+        Assert.Contains("root => root", generated);
+        Assert.Contains("inner => new RoutedProto.AppState { PlayerState = inner }", generated);
+    }
+
+    [Fact]
+    public void Event側で複数の親がある場合_PROTO005が報告される()
+    {
+        var source = @"
+using Cortis;
+using AmbiguousEvtProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(InnerCommand), typeof(InnerEvent))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoIt(InnerCommand.Types.DoIt cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.AmbiguousEventRoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO005");
+        Assert.Single(diagnostics);
+        var msg = diagnostics[0].GetMessage();
+        Assert.Contains("InnerEvent", msg);
+        Assert.Contains("[ProtoRoute(typeof(ParentA))]", msg);
+        Assert.Contains("[ProtoRoute(typeof(ParentB))]", msg);
+    }
+
+    [Fact]
+    public void Event側でProtoRouteで曖昧性が解消される()
+    {
+        var source = @"
+using Cortis;
+using AmbiguousEvtProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(InnerCommand), typeof(InnerEvent))]
+    [ProtoRoute(typeof(ParentB))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoIt(InnerCommand.Types.DoIt cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.AmbiguousEventRoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO005");
+        Assert.Empty(diagnostics);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("BindRouted", generated);
+        Assert.Contains("ParentB", generated);
+    }
+
+    [Fact]
+    public void 多段ネストで中間層が曖昧な場合_ProtoRouteで解消される()
+    {
+        var source = @"
+using Cortis;
+using AmbiguousMidProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(Leaf.Types.FCommand))]
+    [ProtoRoute(typeof(Mid1))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoIt(Leaf.Types.FCommand.Types.DoIt cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.AmbiguousMidLayerMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO005");
+        Assert.Empty(diagnostics);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("BindRouted", generated);
+        Assert.Contains("Root", generated);
+        Assert.Contains("Mid1", generated);
+    }
+
+    [Fact]
+    public void 多段ネストで中間層が曖昧でProtoRouteなし_PROTO005が報告される()
+    {
+        var source = @"
+using Cortis;
+using AmbiguousMidProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(Leaf.Types.FCommand))]
+    public sealed partial class TestPresenter
+    {
+        void HandleDoIt(Leaf.Types.FCommand.Types.DoIt cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.AmbiguousMidLayerMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO005");
+        Assert.Single(diagnostics);
+        var msg = diagnostics[0].GetMessage();
+        Assert.Contains("Mid1", msg);
+        Assert.Contains("Mid2", msg);
+        Assert.Contains("[ProtoRoute(typeof(Mid1))]", msg);
+        Assert.Contains("[ProtoRoute(typeof(Mid2))]", msg);
+    }
+
+    [Fact]
+    public void ProtoRouteなしで一意なルートは正常に動作する()
+    {
+        var source = @"
+using Cortis;
+using RoutedProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(PlayerAction), typeof(PlayerState))]
+    public sealed partial class TestPresenter
+    {
+        void HandleJump(PlayerAction.Types.Jump cmd) { }
+        void HandleMove(PlayerAction.Types.Move cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.RoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var diagnostics005 = GeneratorTestHelper.GetDiagnostics(result, "PROTO005");
+        var diagnostics006 = GeneratorTestHelper.GetDiagnostics(result, "PROTO006");
+        Assert.Empty(diagnostics005);
+        Assert.Empty(diagnostics006);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+        Assert.Contains("BindRouted", generated);
+    }
+
+    [Fact]
+    public void 循環参照があってもDiscoverRouteが無限ループしない()
+    {
+        var source = @"
+using Cortis;
+using CircularProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(TypeA))]
+    public sealed partial class TestPresenter
+    {
+        void HandleTypeB(TypeB cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        // Should not hang or throw
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.CircularRoutedMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
     }
 }
 

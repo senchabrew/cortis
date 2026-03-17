@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
@@ -22,7 +23,8 @@ namespace ProtoHandlerGen
                         model.ClassLocation,
                         unhandled.CaseName,
                         model.CommandTypeFullName,
-                        model.ClassName));
+                        model.ClassName,
+                        unhandled.CaseTypeFullName));
                 }
             }
 
@@ -52,6 +54,49 @@ namespace ProtoHandlerGen
                         unmatched.MethodName,
                         model.ClassName));
                 }
+            }
+
+            // Diagnostics: PROTO005 - Ambiguous routing path
+            if (model.CommandRouteAmbiguity != null)
+            {
+                var parents = model.CommandRouteAmbiguity.Split(new[] { ", " }, System.StringSplitOptions.None);
+                var first = parents.Length > 0 ? parents[0].Split('.').Last() : "";
+                var second = parents.Length > 1 ? parents[1].Split('.').Last() : first;
+                context.ReportDiagnostic(Diagnostic.Create(
+                    Descriptors.AmbiguousRoute,
+                    model.ClassLocation,
+                    model.CommandTypeFullName,
+                    model.CommandRouteAmbiguity,
+                    first,
+                    second));
+            }
+            if (model.EventRouteAmbiguity != null)
+            {
+                var parents = model.EventRouteAmbiguity.Split(new[] { ", " }, System.StringSplitOptions.None);
+                var first = parents.Length > 0 ? parents[0].Split('.').Last() : "";
+                var second = parents.Length > 1 ? parents[1].Split('.').Last() : first;
+                context.ReportDiagnostic(Diagnostic.Create(
+                    Descriptors.AmbiguousRoute,
+                    model.ClassLocation,
+                    model.EventTypeFullName,
+                    model.EventRouteAmbiguity,
+                    first,
+                    second));
+            }
+
+            // Diagnostics: PROTO006 - Invalid route hint
+            if (model.InvalidRouteHint != null)
+            {
+                var targetType = model.CommandRouteAmbiguity != null
+                    ? model.CommandTypeFullName
+                    : model.EventTypeFullName;
+                var validParents = model.CommandRouteAmbiguity ?? model.EventRouteAmbiguity ?? "";
+                context.ReportDiagnostic(Diagnostic.Create(
+                    Descriptors.InvalidRouteHint,
+                    model.ClassLocation,
+                    model.InvalidRouteHint,
+                    targetType,
+                    validParents));
             }
 
             var sb = new StringBuilder();
@@ -106,10 +151,18 @@ namespace ProtoHandlerGen
             sb.AppendLine();
 
             // Method injection: bind command/event subscriptions
+            var hasCommandRoute = !model.CommandRoute.IsDefaultOrEmpty;
+            var hasEventRoute = !model.EventRoute.IsDefaultOrEmpty;
+            var hasAnyRoute = hasCommandRoute || hasEventRoute;
+
             sb.AppendLine($"{i2}[Inject]");
             sb.AppendLine($"{i2}void InjectBindings(IMessageGateway gateway)");
             sb.AppendLine($"{i2}{{");
-            if (isEventOnly)
+            if (hasAnyRoute)
+            {
+                EmitRoutedBinding(sb, i3, model, isEventOnly, isCommandOnly, hasCommandRoute, hasEventRoute);
+            }
+            else if (isEventOnly)
             {
                 sb.AppendLine($"{i3}_binder = MessageBinding.Bind<{model.EventTypeFullName}>(this, gateway);");
             }
@@ -228,6 +281,106 @@ namespace ProtoHandlerGen
 
             context.AddSource($"{model.ClassName}.g.cs",
                 SourceText.From(sb.ToString(), Encoding.UTF8));
+        }
+
+        static void EmitRoutedBinding(
+            StringBuilder sb,
+            string indent,
+            PresenterModel model,
+            bool isEventOnly,
+            bool isCommandOnly,
+            bool hasCommandRoute,
+            bool hasEventRoute)
+        {
+            var i4 = indent + "    ";
+
+            if (isEventOnly)
+            {
+                var rootEvtType = model.EventRoute[0].ParentTypeFullName;
+                sb.AppendLine($"{indent}_binder = MessageBinding.BindRouted<{rootEvtType}, {model.EventTypeFullName}>(this, gateway,");
+                EmitWrapLambda(sb, i4, model.EventRoute);
+                sb.AppendLine(");");
+            }
+            else if (isCommandOnly)
+            {
+                var rootCmdType = model.CommandRoute[0].ParentTypeFullName;
+                sb.AppendLine($"{indent}_binder = MessageBinding.BindRouted<{rootCmdType}, {model.CommandTypeFullName}>(this, gateway,");
+                EmitUnwrapLambda(sb, i4, model.CommandRoute);
+                sb.AppendLine(");");
+            }
+            else
+            {
+                var rootCmdType = hasCommandRoute ? model.CommandRoute[0].ParentTypeFullName : model.CommandTypeFullName;
+                var rootEvtType = hasEventRoute ? model.EventRoute[0].ParentTypeFullName : model.EventTypeFullName;
+                sb.AppendLine($"{indent}_binder = MessageBinding.BindRouted<{rootCmdType}, {model.CommandTypeFullName}, {rootEvtType}, {model.EventTypeFullName}>(");
+                sb.AppendLine($"{i4}this, this, gateway,");
+                if (hasCommandRoute)
+                    EmitUnwrapLambda(sb, i4, model.CommandRoute);
+                else
+                    sb.Append($"{i4}root => root");
+                sb.AppendLine(",");
+                if (hasEventRoute)
+                    EmitWrapLambda(sb, i4, model.EventRoute);
+                else
+                    sb.Append($"{i4}inner => inner");
+                sb.AppendLine(");");
+            }
+        }
+
+        /// <summary>
+        /// Command の unwrap ラムダを生成する。
+        /// 1段: root => root.ActionCase == X.PlayerAction ? root.PlayerAction : null
+        /// 多段: root => { if (...) return null; var _r0 = ...; ... return _rN.Inner; }
+        /// </summary>
+        static void EmitUnwrapLambda(StringBuilder sb, string indent, ImmutableArray<RouteSegment> route)
+        {
+            if (route.Length == 1)
+            {
+                var seg = route[0];
+                sb.Append($"{indent}root => root.{seg.OneofCasePropertyName} == {seg.OneofEnumFullName}.{seg.PropertyName} ? root.{seg.PropertyName} : null");
+            }
+            else
+            {
+                sb.AppendLine($"{indent}root =>");
+                sb.AppendLine($"{indent}{{");
+                var varName = "root";
+                for (int i = 0; i < route.Length; i++)
+                {
+                    var seg = route[i];
+                    sb.AppendLine($"{indent}    if ({varName}.{seg.OneofCasePropertyName} != {seg.OneofEnumFullName}.{seg.PropertyName}) return null;");
+                    if (i < route.Length - 1)
+                    {
+                        var nextVar = $"_r{i}";
+                        sb.AppendLine($"{indent}    var {nextVar} = {varName}.{seg.PropertyName};");
+                        varName = nextVar;
+                    }
+                    else
+                    {
+                        sb.AppendLine($"{indent}    return {varName}.{seg.PropertyName};");
+                    }
+                }
+                sb.Append($"{indent}}}");
+            }
+        }
+
+        /// <summary>
+        /// Event の wrap ラムダを生成する。
+        /// 1段: inner => new AppState { PlayerState = inner }
+        /// 多段: inner => new RootState { Mid = new MidState { Inner = inner } }
+        /// </summary>
+        static void EmitWrapLambda(StringBuilder sb, string indent, ImmutableArray<RouteSegment> route)
+        {
+            sb.Append($"{indent}inner => ");
+            for (int i = 0; i < route.Length; i++)
+            {
+                var seg = route[i];
+                sb.Append($"new {seg.ParentTypeFullName} {{ {seg.PropertyName} = ");
+            }
+            sb.Append("inner");
+            for (int i = 0; i < route.Length; i++)
+            {
+                sb.Append(" }");
+            }
         }
     }
 }

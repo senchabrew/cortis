@@ -54,6 +54,7 @@ namespace Test
         var diagnostics = GeneratorTestHelper.GetDiagnostics(result, "PROTO001");
         Assert.Single(diagnostics);
         Assert.Contains("Reset", diagnostics[0].GetMessage());
+        Assert.Contains("void HandleReset(TestProto.MyCommand.Types.Reset command) { }", diagnostics[0].GetMessage());
     }
 
     [Fact]

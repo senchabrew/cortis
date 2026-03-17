@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package cortis.tests;
+
+// BindRouted 結合テスト用の protoc 生成型。
+// 2段ネスト: Root.Command が Inner.Command を包む。
+
+message Inner {
+  message Command {
+    message DoFoo { string name = 1; }
+    message DoBar { int32 count = 1; }
+    oneof command {
+      DoFoo do_foo = 1;
+      DoBar do_bar = 2;
+    }
+  }
+  message Event {
+    message FooDone { string result = 1; }
+    oneof event {
+      FooDone foo_done = 1;
+    }
+  }
+}
+
+message Other {
+  message Command {
+    message DoOther { string value = 1; }
+    oneof command {
+      DoOther do_other = 1;
+    }
+  }
+}
+
+message Root {
+  message Command {
+    oneof command {
+      Inner.Command inner = 1;
+      Other.Command other = 2;
+    }
+  }
+  message Event {
+    oneof event {
+      Inner.Event inner = 1;
+    }
+  }
+}
