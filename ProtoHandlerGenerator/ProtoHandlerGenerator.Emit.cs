@@ -223,9 +223,9 @@ namespace ProtoHandlerGen
             sb.AppendLine();
 
             // Register
-            sb.AppendLine($"{i2}public static void Register(IContainerBuilder builder, Lifetime lifetime)");
+            sb.AppendLine($"{i2}public static RegistrationBuilder Register(IContainerBuilder builder, Lifetime lifetime)");
             sb.AppendLine($"{i2}{{");
-            sb.Append($"{i3}builder.Register<{model.ClassName}>(lifetime)");
+            sb.Append($"{i3}return builder.Register<{model.ClassName}>(lifetime)");
             sb.AppendLine();
             if (!isEventOnly)
             {
