@@ -11,7 +11,7 @@ namespace ProtoHandlerGenerator.Tests;
 
 public static class GeneratorTestHelper
 {
-    public static GeneratorDriverRunResult RunGenerator(params string[] sources)
+    public static CSharpCompilation CreateCompilation(params string[] sources)
     {
         var allSources = new List<string> { Stubs.ProtoHandlerAttribute };
         allSources.AddRange(sources);
@@ -24,11 +24,16 @@ public static class GeneratorTestHelper
             .Cast<MetadataReference>()
             .ToList();
 
-        var compilation = CSharpCompilation.Create(
+        return CSharpCompilation.Create(
             assemblyName: "TestAssembly",
             syntaxTrees: syntaxTrees,
             references: references,
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+    }
+
+    public static GeneratorDriverRunResult RunGenerator(params string[] sources)
+    {
+        var compilation = CreateCompilation(sources);
 
         var generator = new ProtoHandlerGen.ProtoHandlerGenerator();
 
@@ -36,6 +41,50 @@ public static class GeneratorTestHelper
         driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
 
         return driver.GetRunResult();
+    }
+
+    /// <summary>
+    /// 同一 driver で 2 回実行し、2 回目のインクリメンタル実行結果を得る。
+    /// 1 回目と 2 回目の間に addedSource を Compilation へ追加する。
+    /// </summary>
+    public static (GeneratorDriverRunResult First, GeneratorDriverRunResult Second) RunGeneratorTwice(
+        string[] sources,
+        string addedSource)
+    {
+        var compilation = CreateCompilation(sources);
+
+        var generator = new ProtoHandlerGen.ProtoHandlerGenerator();
+
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            new[] { generator.AsSourceGenerator() },
+            driverOptions: new GeneratorDriverOptions(
+                disabledOutputs: IncrementalGeneratorOutputKind.None,
+                trackIncrementalGeneratorSteps: true));
+
+        driver = driver.RunGenerators(compilation);
+        var first = driver.GetRunResult();
+
+        var updated = compilation.AddSyntaxTrees(CSharpSyntaxTree.ParseText(addedSource));
+        driver = driver.RunGenerators(updated);
+        var second = driver.GetRunResult();
+
+        return (first, second);
+    }
+
+    /// <summary>
+    /// 指定ステージの全出力の実行理由を返す。
+    /// </summary>
+    public static IReadOnlyList<IncrementalStepRunReason> GetStepReasons(
+        GeneratorDriverRunResult result,
+        string trackingName)
+    {
+        if (!result.Results[0].TrackedSteps.TryGetValue(trackingName, out var steps))
+            return Array.Empty<IncrementalStepRunReason>();
+
+        return steps
+            .SelectMany(step => step.Outputs)
+            .Select(output => output.Reason)
+            .ToList();
     }
 
     public static string? GetGeneratedSource(GeneratorDriverRunResult result, string hintNameContains)

@@ -9,7 +9,11 @@ namespace ProtoHandlerGen
 {
     public sealed partial class ProtoHandlerGenerator
     {
-        static PresenterModel? ExtractModel(GeneratorSyntaxContext ctx, CancellationToken ct)
+        /// <summary>
+        /// [ProtoHandler] クラスから、ルーティング経路を除く全情報を抽出する。
+        /// Compilation 全体には触れず、対象クラスと属性引数の型のみを見る。
+        /// </summary>
+        static PresenterModel? ExtractPresenter(GeneratorSyntaxContext ctx, CancellationToken ct)
         {
             var classDecl = (ClassDeclarationSyntax)ctx.Node;
             var classSymbol = ctx.SemanticModel.GetDeclaredSymbol(classDecl, ct) as INamedTypeSymbol;
@@ -59,7 +63,6 @@ namespace ProtoHandlerGen
 
             // Extract [ProtoRoute] hints
             var routeHints = ImmutableArray<string>.Empty;
-            string invalidRouteHint = null;
             var routeAttr = classSymbol.GetAttributes().FirstOrDefault(a =>
                 a.AttributeClass?.Name == "ProtoRouteAttribute");
             if (routeAttr != null)
@@ -83,19 +86,6 @@ namespace ProtoHandlerGen
                 routeHints = builder2.ToImmutable();
             }
 
-            // Route discovery: find parent oneof chain for inner types
-            var allOneofTypes = GetAllOneofMessageTypes(ctx.SemanticModel.Compilation);
-            string cmdRouteAmbiguity = null;
-            string evtRouteAmbiguity = null;
-            var commandRoute = commandType != null
-                ? DiscoverRoute(commandType, allOneofTypes, routeHints, out cmdRouteAmbiguity, out invalidRouteHint)
-                : ImmutableArray<RouteSegment>.Empty;
-            string invalidRouteHintEvt = null;
-            var eventRoute = eventType != null
-                ? DiscoverRoute(eventType, allOneofTypes, routeHints, out evtRouteAmbiguity, out invalidRouteHintEvt)
-                : ImmutableArray<RouteSegment>.Empty;
-            if (invalidRouteHint == null) invalidRouteHint = invalidRouteHintEvt;
-
             var infraNamespace = attr.AttributeClass.ContainingNamespace is { IsGlobalNamespace: false } ns
                 ? ns.ToDisplayString()
                 : null;
@@ -118,13 +108,39 @@ namespace ProtoHandlerGen
                 Handlers = handlers,
                 UnhandledCases = unhandledCases,
                 UnmatchedHandleMethods = unmatchedHandleMethods,
-                CommandRoute = commandRoute,
-                EventRoute = eventRoute,
-                CommandRouteAmbiguity = cmdRouteAmbiguity,
-                EventRouteAmbiguity = evtRouteAmbiguity,
+                // ルーティング経路は ResolveRoutes で解決する
+                CommandRoute = ImmutableArray<RouteSegment>.Empty,
+                EventRoute = ImmutableArray<RouteSegment>.Empty,
                 RouteHints = routeHints,
-                InvalidRouteHint = invalidRouteHint,
             };
+        }
+
+        /// <summary>
+        /// oneof 索引を使ってルーティング経路を解決し、経路情報を埋めたモデルを返す。
+        /// ISymbol に触らない純粋な関数のため、索引と入力モデルが等価なら結果も等価になる。
+        /// </summary>
+        static PresenterModel ResolveRoutes(PresenterModel model, OneofIndex index)
+        {
+            string commandAmbiguity = null;
+            string invalidHint = null;
+            var commandRoute = model.CommandTypeFullName != null
+                ? DiscoverRoute(model.CommandTypeFullName, index, model.RouteHints,
+                    out commandAmbiguity, out invalidHint)
+                : ImmutableArray<RouteSegment>.Empty;
+
+            string eventAmbiguity = null;
+            string invalidHintFromEvent = null;
+            var eventRoute = model.EventTypeFullName != null
+                ? DiscoverRoute(model.EventTypeFullName, index, model.RouteHints,
+                    out eventAmbiguity, out invalidHintFromEvent)
+                : ImmutableArray<RouteSegment>.Empty;
+
+            model.CommandRoute = commandRoute;
+            model.EventRoute = eventRoute;
+            model.CommandRouteAmbiguity = commandAmbiguity;
+            model.EventRouteAmbiguity = eventAmbiguity;
+            model.InvalidRouteHint = invalidHint ?? invalidHintFromEvent;
+            return model;
         }
 
         static ImmutableArray<CaseModel> DiscoverOneofCases(INamedTypeSymbol messageType)
@@ -240,42 +256,13 @@ namespace ProtoHandlerGen
         }
 
         /// <summary>
-        /// コンパイル中の全型から *OneofCase enum を持つ protobuf メッセージ型を収集する。
-        /// </summary>
-        static List<INamedTypeSymbol> GetAllOneofMessageTypes(Compilation compilation)
-        {
-            var result = new List<INamedTypeSymbol>();
-            CollectOneofMessageTypes(compilation.GlobalNamespace, result);
-            return result;
-        }
-
-        static void CollectOneofMessageTypes(INamespaceSymbol ns, List<INamedTypeSymbol> result)
-        {
-            foreach (var type in ns.GetTypeMembers())
-                CollectOneofMessageTypesRecursive(type, result);
-            foreach (var childNs in ns.GetNamespaceMembers())
-                CollectOneofMessageTypes(childNs, result);
-        }
-
-        static void CollectOneofMessageTypesRecursive(INamedTypeSymbol type, List<INamedTypeSymbol> result)
-        {
-            if (type.GetTypeMembers().Any(t => t.TypeKind == TypeKind.Enum && t.Name.EndsWith("OneofCase")))
-                result.Add(type);
-            foreach (var nested in type.GetTypeMembers())
-            {
-                if (nested.TypeKind == TypeKind.Class)
-                    CollectOneofMessageTypesRecursive(nested, result);
-            }
-        }
-
-        /// <summary>
-        /// targetType を含む親 oneof メッセージを再帰的に辿り、root からの経路を返す。
-        /// 親が見つからない場合（= targetType が root）は空配列を返す。
+        /// targetFullName を含む親 oneof メッセージを索引から再帰的に辿り、root からの経路を返す。
+        /// 親が見つからない場合（= targetFullName が root）は空配列を返す。
         /// routeHints が指定されている場合、曖昧な親からヒントに一致するものを選択する。
         /// </summary>
         static ImmutableArray<RouteSegment> DiscoverRoute(
-            INamedTypeSymbol targetType,
-            List<INamedTypeSymbol> allOneofTypes,
+            string targetFullName,
+            OneofIndex index,
             ImmutableArray<string> routeHints,
             out string ambiguity,
             out string invalidHint)
@@ -283,16 +270,15 @@ namespace ProtoHandlerGen
             ambiguity = null;
             invalidHint = null;
             var segments = new List<RouteSegment>();
-            var current = targetType;
+            var current = targetFullName;
             var visited = new HashSet<string>();
             var hintSet = new HashSet<string>(routeHints);
 
             while (true)
             {
-                var fullName = current.ToDisplayString();
-                if (!visited.Add(fullName)) break;
+                if (!visited.Add(current)) break;
 
-                var parents = FindParentSegments(current, allOneofTypes);
+                var parents = index.FindParents(current);
 
                 if (parents.Count == 0) break;
 
@@ -303,8 +289,7 @@ namespace ProtoHandlerGen
                     if (matched.Count == 1)
                     {
                         segments.Add(matched[0]);
-                        current = allOneofTypes.FirstOrDefault(t => t.ToDisplayString() == matched[0].ParentTypeFullName);
-                        if (current == null) break;
+                        current = matched[0].ParentTypeFullName;
                         continue;
                     }
 
@@ -319,7 +304,6 @@ namespace ProtoHandlerGen
                     if (!hintSet.IsSubsetOf(System.Array.Empty<string>()))
                     {
                         // Hints were provided but none matched at this level
-                        var validParents = string.Join(", ", parents.Select(p => p.ParentTypeFullName));
                         var unmatchedHints = routeHints.Where(h => !parents.Any(p => p.ParentTypeFullName == h)).ToArray();
                         if (unmatchedHints.Length > 0)
                         {
@@ -332,55 +316,11 @@ namespace ProtoHandlerGen
                 }
 
                 segments.Add(parents[0]);
-                current = allOneofTypes.FirstOrDefault(t => t.ToDisplayString() == parents[0].ParentTypeFullName);
-                if (current == null) break;
+                current = parents[0].ParentTypeFullName;
             }
 
             segments.Reverse();
             return segments.ToImmutableArray();
-        }
-
-        /// <summary>
-        /// targetType を oneof プロパティとして持つ親メッセージ型を探す。
-        /// </summary>
-        static List<RouteSegment> FindParentSegments(
-            INamedTypeSymbol targetType,
-            List<INamedTypeSymbol> allOneofTypes)
-        {
-            var results = new List<RouteSegment>();
-
-            foreach (var candidate in allOneofTypes)
-            {
-                if (SymbolEqualityComparer.Default.Equals(candidate, targetType)) continue;
-
-                var oneofEnum = candidate.GetTypeMembers()
-                    .FirstOrDefault(t => t.TypeKind == TypeKind.Enum && t.Name.EndsWith("OneofCase"));
-                if (oneofEnum == null) continue;
-
-                foreach (var field in oneofEnum.GetMembers().OfType<IFieldSymbol>())
-                {
-                    if (field.Name == "None" || !field.HasConstantValue) continue;
-
-                    var prop = candidate.GetMembers(field.Name)
-                        .OfType<IPropertySymbol>()
-                        .FirstOrDefault();
-                    if (prop == null) continue;
-
-                    if (SymbolEqualityComparer.Default.Equals(prop.Type, targetType))
-                    {
-                        var oneofName = oneofEnum.Name;
-                        results.Add(new RouteSegment
-                        {
-                            ParentTypeFullName = candidate.ToDisplayString(),
-                            PropertyName = field.Name,
-                            OneofEnumFullName = oneofEnum.ToDisplayString(),
-                            OneofCasePropertyName = oneofName.Substring(0, oneofName.Length - "OneofCase".Length) + "Case",
-                        });
-                    }
-                }
-            }
-
-            return results;
         }
     }
 }

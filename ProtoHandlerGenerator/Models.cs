@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -125,6 +126,122 @@ namespace ProtoHandlerGen
 
         public override bool Equals(object obj) => obj is HandlerModel other && Equals(other);
         public override int GetHashCode() => (MethodName?.GetHashCode() ?? 0) ^ (CaseName?.GetHashCode() ?? 0);
+    }
+
+    /// <summary>
+    /// oneof メッセージ型1件分の情報。ISymbol を保持せず文字列のみで構成するため、
+    /// Compilation をまたいで値として比較できる。
+    /// </summary>
+    struct OneofMessageInfo : IEquatable<OneofMessageInfo>
+    {
+        public string FullName;
+        public string OneofEnumFullName;
+        public string OneofCasePropertyName;
+
+        /// oneof case 名 → そのプロパティの型の完全修飾名
+        public ImmutableArray<OneofCaseLink> Cases;
+
+        public bool Equals(OneofMessageInfo other) =>
+            FullName == other.FullName
+            && OneofEnumFullName == other.OneofEnumFullName
+            && OneofCasePropertyName == other.OneofCasePropertyName
+            && Cases.SequenceEqual(other.Cases);
+
+        public override bool Equals(object obj) => obj is OneofMessageInfo other && Equals(other);
+        public override int GetHashCode() => (FullName?.GetHashCode() ?? 0) ^ Cases.Length;
+    }
+
+    struct OneofCaseLink : IEquatable<OneofCaseLink>
+    {
+        public string CaseName;
+        public string PropertyTypeFullName;
+
+        public bool Equals(OneofCaseLink other) =>
+            CaseName == other.CaseName && PropertyTypeFullName == other.PropertyTypeFullName;
+
+        public override bool Equals(object obj) => obj is OneofCaseLink other && Equals(other);
+        public override int GetHashCode() =>
+            (CaseName?.GetHashCode() ?? 0) ^ (PropertyTypeFullName?.GetHashCode() ?? 0);
+    }
+
+    /// <summary>
+    /// Compilation 内の全 oneof メッセージ型の索引。
+    /// ルーティング経路の探索に必要な情報だけを文字列で保持するため、
+    /// proto 定義に変化がなければ値として等価になり、下流ステージの再実行を防げる。
+    /// </summary>
+    sealed class OneofIndex : IEquatable<OneofIndex>
+    {
+        public static readonly OneofIndex Empty = new(ImmutableArray<OneofMessageInfo>.Empty);
+
+        public ImmutableArray<OneofMessageInfo> Messages { get; }
+
+        /// 子型の完全修飾名 → その型を oneof case として持つ親セグメント群
+        readonly Dictionary<string, List<RouteSegment>> _parentsByChild;
+
+        public OneofIndex(ImmutableArray<OneofMessageInfo> messages)
+        {
+            Messages = messages;
+            _parentsByChild = BuildParentLookup(messages);
+        }
+
+        static Dictionary<string, List<RouteSegment>> BuildParentLookup(
+            ImmutableArray<OneofMessageInfo> messages)
+        {
+            var lookup = new Dictionary<string, List<RouteSegment>>();
+
+            foreach (var message in messages)
+            {
+                foreach (var link in message.Cases)
+                {
+                    // 自己参照はルーティング経路にならない
+                    if (link.PropertyTypeFullName == message.FullName) continue;
+
+                    if (!lookup.TryGetValue(link.PropertyTypeFullName, out var parents))
+                    {
+                        parents = new List<RouteSegment>();
+                        lookup[link.PropertyTypeFullName] = parents;
+                    }
+
+                    parents.Add(new RouteSegment
+                    {
+                        ParentTypeFullName = message.FullName,
+                        PropertyName = link.CaseName,
+                        OneofEnumFullName = message.OneofEnumFullName,
+                        OneofCasePropertyName = message.OneofCasePropertyName,
+                    });
+                }
+            }
+
+            return lookup;
+        }
+
+        /// <summary>
+        /// childFullName を oneof case として持つ親セグメントを返す。
+        /// </summary>
+        public IReadOnlyList<RouteSegment> FindParents(string childFullName)
+        {
+            if (childFullName != null && _parentsByChild.TryGetValue(childFullName, out var parents))
+                return parents;
+            return System.Array.Empty<RouteSegment>();
+        }
+
+        // 索引の等価性は内容のみで決まる（_parentsByChild は Messages から導出される）
+        public bool Equals(OneofIndex other) =>
+            other != null && Messages.SequenceEqual(other.Messages);
+
+        public override bool Equals(object obj) => obj is OneofIndex other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hash = 17;
+                hash = hash * 31 + Messages.Length;
+                foreach (var message in Messages)
+                    hash = hash * 31 + (message.FullName?.GetHashCode() ?? 0);
+                return hash;
+            }
+        }
     }
 
     /// <summary>
