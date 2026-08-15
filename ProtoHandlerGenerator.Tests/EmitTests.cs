@@ -1,3 +1,4 @@
+using System.Linq;
 using Xunit;
 
 namespace ProtoHandlerGenerator.Tests;
@@ -1352,6 +1353,42 @@ namespace Test
         var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
         Assert.NotNull(generated);
         Assert.Contains("using Cortis;", generated);
+    }
+
+    [Fact]
+    public void using宣言が重複しない()
+    {
+        var source = @"
+using Cortis;
+using TestProto;
+
+namespace Test
+{
+    [ProtoHandler(typeof(MyCommand), typeof(MyEvent))]
+    public sealed partial class TestPresenter
+    {
+        void HandleSetScale(MyCommand.Types.SetScale cmd) { }
+        void HandleReset(MyCommand.Types.Reset cmd) { }
+        private partial void OnInitialize() { }
+        private partial void OnDispose() { }
+    }
+}";
+        var result = GeneratorTestHelper.RunGenerator(
+            Stubs.CommandAndEventMessage, Stubs.VContainerStubs, Stubs.R3Stubs, source);
+
+        var generated = GeneratorTestHelper.GetGeneratedSource(result, "TestPresenter.g.cs");
+        Assert.NotNull(generated);
+
+        // InfrastructureNamespace は属性の定義位置 (Cortis) から導出されるため、
+        // 固定の using Cortis; と重複しうる (CS0105)
+        var usingLines = generated!
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("using "))
+            .ToList();
+
+        Assert.NotEmpty(usingLines);
+        Assert.Equal(usingLines.Distinct().Count(), usingLines.Count);
     }
 
     [Fact]
